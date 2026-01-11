@@ -1,8 +1,6 @@
 import { useCallback } from 'react'
 import { useChatStore } from '@/store/chat.store'
 import { useCharacterStore } from '@/store/character.store'
-import { aiService } from '@/services/ai.service'
-import { buildContextualPrompt, formatMessagesForAPI } from '@/utils/promptBuilder'
 import type { Message } from '@/types/chat'
 
 export function useChat() {
@@ -32,12 +30,10 @@ export function useChat() {
 
       let sessionId = currentSessionId
 
-      // Create new session if none exists
       if (!sessionId) {
         sessionId = createSession(currentCharacter.id)
       }
 
-      // Add user message
       const userMessage: Omit<Message, 'id'> = {
         role: 'user',
         content,
@@ -48,7 +44,6 @@ export function useChat() {
 
       addMessage(sessionId, userMessage)
 
-      // Prepare assistant message
       const assistantMessageId = `temp-${Date.now()}`
       const assistantMessage: Omit<Message, 'id'> = {
         role: 'assistant',
@@ -68,53 +63,39 @@ export function useChat() {
           throw new Error('Session not found')
         }
 
-        const messages = currentSession.messages.filter(
-          (msg) => msg.role !== 'system'
-        )
+        const messages = currentSession.messages.filter((msg) => msg.role !== 'system')
 
-        const systemPrompt = buildContextualPrompt(
-          currentCharacter,
-          messages
-        )
+        // Call the API endpoint
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messages: messages.map((m) => ({
+              role: m.role,
+              content: m.content,
+            })),
+            characterId: currentCharacter.id,
+            stream: false, // Temporarily set to false for testing
+          }),
+        })
 
-        if (stream) {
-          // Streaming response
-          let fullResponse = ''
-
-          await aiService.generateStreamingResponse(
-            messages,
-            systemPrompt,
-            (chunk) => {
-              fullResponse += chunk
-              updateMessage(sessionId!, assistantMessageId, {
-                content: fullResponse,
-                status: 'streaming',
-              })
-            }
-          )
-
-          // Mark as sent when complete
-          updateMessage(sessionId, assistantMessageId, {
-            content: fullResponse,
-            status: 'sent',
-          })
-        } else {
-          // Non-streaming response
-          const response = await aiService.generateResponse(
-            messages,
-            systemPrompt
-          )
-
-          updateMessage(sessionId, assistantMessageId, {
-            content: response,
-            status: 'sent',
-          })
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}))
+          throw new Error(errorData.error || `API error: ${response.statusText}`)
         }
+
+        const data = await response.json()
+
+        updateMessage(sessionId, assistantMessageId, {
+          content: data.message.content,
+          status: 'sent',
+        })
 
         setError(null)
       } catch (err) {
-        const errorMessage =
-          err instanceof Error ? err.message : 'Failed to send message'
+        const errorMessage = err instanceof Error ? err.message : 'Failed to send message'
 
         updateMessage(sessionId!, assistantMessageId, {
           status: 'error',
@@ -122,6 +103,7 @@ export function useChat() {
         })
 
         setError(errorMessage)
+        console.error('Send message error:', err)
       } finally {
         setStreaming(false)
       }

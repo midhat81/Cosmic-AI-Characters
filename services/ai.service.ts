@@ -53,28 +53,32 @@ class AIService {
     this.service = AI_CONFIG.service
     this.baseUrl = AI_CONFIG.ollama.baseUrl
     this.model = AI_CONFIG.ollama.model
+
+    console.log('🤖 AI Service initialized:', {
+      service: this.service,
+      baseUrl: this.baseUrl,
+      model: this.model,
+    })
   }
 
-  /**
-   * Generate a response from the AI model
-   */
   async generateResponse(
     messages: Message[],
     systemPrompt: string,
     config: AIServiceConfig = {}
   ): Promise<string> {
     try {
+      console.log('📤 Generating AI response...', {
+        messageCount: messages.length,
+        model: this.model,
+      })
+
       if (this.service === 'local') {
-        return await this.generateOllamaResponse(
-          messages,
-          systemPrompt,
-          config
-        )
+        return await this.generateOllamaResponse(messages, systemPrompt, config)
       } else {
-        return await this.generateCloudResponse(messages, systemPrompt, config)
+        throw new AIServiceError('Cloud AI not configured', 'NOT_CONFIGURED')
       }
     } catch (error) {
-      console.error('AI Service Error:', error)
+      console.error('❌ AI Service Error:', error)
       throw new AIServiceError(
         'Failed to generate AI response',
         'GENERATION_FAILED',
@@ -83,9 +87,6 @@ class AIService {
     }
   }
 
-  /**
-   * Generate a streaming response from the AI model
-   */
   async generateStreamingResponse(
     messages: Message[],
     systemPrompt: string,
@@ -94,17 +95,12 @@ class AIService {
   ): Promise<void> {
     try {
       if (this.service === 'local') {
-        await this.streamOllamaResponse(
-          messages,
-          systemPrompt,
-          onChunk,
-          config
-        )
+        await this.streamOllamaResponse(messages, systemPrompt, onChunk, config)
       } else {
-        await this.streamCloudResponse(messages, systemPrompt, onChunk, config)
+        throw new AIServiceError('Cloud AI not configured', 'NOT_CONFIGURED')
       }
     } catch (error) {
-      console.error('AI Streaming Error:', error)
+      console.error('❌ AI Streaming Error:', error)
       throw new AIServiceError(
         'Failed to stream AI response',
         'STREAMING_FAILED',
@@ -113,9 +109,6 @@ class AIService {
     }
   }
 
-  /**
-   * Generate response using Ollama
-   */
   private async generateOllamaResponse(
     messages: Message[],
     systemPrompt: string,
@@ -135,23 +128,38 @@ class AIService {
       },
     }
 
-    const response = await fetcher<OllamaResponse>(
-      `${this.baseUrl}/api/generate`,
-      {
-        method: 'POST',
-        body: JSON.stringify(requestBody),
-        timeout: 60000,
-        retry: 2,
-        retryDelay: 2000,
-      }
-    )
+    console.log('📡 Calling Ollama:', {
+      url: `${this.baseUrl}/api/generate`,
+      model: requestBody.model,
+      promptLength: prompt.length,
+    })
 
-    return response.response
+    try {
+      const response = await fetch(`${this.baseUrl}/api/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Ollama API error: ${response.status} ${response.statusText}`)
+      }
+
+      const data: OllamaResponse = await response.json()
+      console.log('✅ Ollama response received:', {
+        responseLength: data.response.length,
+        done: data.done,
+      })
+
+      return data.response
+    } catch (error) {
+      console.error('❌ Ollama fetch error:', error)
+      throw error
+    }
   }
 
-  /**
-   * Stream response using Ollama
-   */
   private async streamOllamaResponse(
     messages: Message[],
     systemPrompt: string,
@@ -180,7 +188,6 @@ class AIService {
         timeout: 120000,
       },
       (chunk) => {
-        // Parse each line as JSON
         const lines = chunk.split('\n').filter((line) => line.trim())
 
         for (const line of lines) {
@@ -190,49 +197,13 @@ class AIService {
               onChunk(data.response)
             }
           } catch (e) {
-            // Skip invalid JSON lines
-            console.warn('Failed to parse stream chunk:', line)
+            console.warn('⚠️ Failed to parse stream chunk:', line)
           }
         }
       }
     )
   }
 
-  /**
-   * Generate response using cloud AI (OpenAI/Anthropic)
-   */
-  private async generateCloudResponse(
-    messages: Message[],
-    systemPrompt: string,
-    config: AIServiceConfig
-  ): Promise<string> {
-    // Placeholder for cloud AI implementation
-    // You can implement OpenAI or Anthropic here if needed
-    throw new AIServiceError(
-      'Cloud AI service not implemented yet',
-      'NOT_IMPLEMENTED'
-    )
-  }
-
-  /**
-   * Stream response using cloud AI
-   */
-  private async streamCloudResponse(
-    messages: Message[],
-    systemPrompt: string,
-    onChunk: (chunk: string) => void,
-    config: AIServiceConfig
-  ): Promise<void> {
-    // Placeholder for cloud AI streaming
-    throw new AIServiceError(
-      'Cloud AI streaming not implemented yet',
-      'NOT_IMPLEMENTED'
-    )
-  }
-
-  /**
-   * Build a single prompt string from message history
-   */
   private buildPromptFromMessages(messages: Message[]): string {
     return messages
       .filter((msg) => msg.role !== 'system')
@@ -243,30 +214,26 @@ class AIService {
       .join('\n\n')
   }
 
-  /**
-   * Check if Ollama service is available
-   */
   async checkHealth(): Promise<boolean> {
     try {
-      const response = await fetcher(`${this.baseUrl}/api/tags`, {
-        timeout: 5000,
+      console.log('🏥 Checking Ollama health:', this.baseUrl)
+      const response = await fetch(`${this.baseUrl}/api/tags`, {
+        method: 'GET',
       })
-      return !!response
+      const isHealthy = response.ok
+      console.log(isHealthy ? '✅ Ollama is healthy' : '❌ Ollama is not responding')
+      return isHealthy
     } catch (error) {
-      console.error('Ollama health check failed:', error)
+      console.error('❌ Ollama health check failed:', error)
       return false
     }
   }
 
-  /**
-   * List available models
-   */
   async listModels(): Promise<string[]> {
     try {
-      const response = await fetcher<{ models: Array<{ name: string }> }>(
-        `${this.baseUrl}/api/tags`
-      )
-      return response.models.map((m) => m.name)
+      const response = await fetch(`${this.baseUrl}/api/tags`)
+      const data: { models: Array<{ name: string }> } = await response.json()
+      return data.models.map((m) => m.name)
     } catch (error) {
       console.error('Failed to list models:', error)
       return []
@@ -274,5 +241,4 @@ class AIService {
   }
 }
 
-// Export singleton instance
 export const aiService = new AIService()

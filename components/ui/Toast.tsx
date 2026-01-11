@@ -1,3 +1,5 @@
+'use client'
+
 import React, { useEffect } from 'react'
 import { clsx } from 'clsx'
 import { X, CheckCircle, AlertCircle, Info, AlertTriangle } from 'lucide-react'
